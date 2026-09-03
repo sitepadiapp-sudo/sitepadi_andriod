@@ -1,9 +1,5 @@
-name: Build Android APK
+name: Build Android APK and AAB
 
-# Runs automatically on every push to main/master, and can also be
-# triggered manually from the Actions tab on GitHub's website (click
-# "Run workflow") — useful if you just want a fresh APK without
-# pushing a code change.
 on:
   push:
     branches: [ main, master ]
@@ -11,124 +7,157 @@ on:
 
 jobs:
   build:
-    # GitHub provides this machine for free — this is the "cloud
-    # computer" doing the actual build, not your laptop.
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Project was uploaded as a single sitepadi-source.zip (GitHub's
-      # web upload only allows 100 files per commit — way fewer than
-      # this project has — so the whole thing goes in as one file and
-      # gets unzipped here instead).
-      - name: Unzip project source
+      - name: Unzip SitePadi source
         run: |
-          if [ -f sitepadi-source.zip ]; then
-            unzip -o sitepadi-source.zip -d .
+          if [ ! -f sitepadi-source.zip ]; then
+            echo "ERROR: sitepadi-source.zip not found in repository root."
+            exit 1
+          fi
+          unzip -o sitepadi-source.zip -d .
+
+      - name: Locate Capacitor project
+        shell: bash
+        run: |
+          if [ -f capacitor.config.ts ]; then
+            PROJECT_DIR="."
+          elif [ -f source/capacitor.config.ts ]; then
+            PROJECT_DIR="source"
+          else
+            CONFIG_PATH=$(find . -type f -name capacitor.config.ts -print -quit)
+            if [ -z "$CONFIG_PATH" ]; then
+              echo "ERROR: capacitor.config.ts not found after unzipping."
+              exit 1
+            fi
+            PROJECT_DIR=$(dirname "$CONFIG_PATH")
           fi
 
-      # google-services.json (downloaded from Firebase Console) gets
-      # uploaded to the repo root via GitHub's web UI, since uploading
-      # into a specific nested folder from a phone is fiddly. Move it
-      # into the one place the Android build actually looks for it.
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Capacitor project: $PROJECT_DIR"
+
       - name: Place google-services.json
+        shell: bash
         run: |
           if [ -f google-services.json ]; then
-            mkdir -p android/app
-            cp google-services.json android/app/google-services.json
-            echo "google-services.json placed in android/app/"
+            mkdir -p "$PROJECT_DIR/android/app"
+            cp google-services.json "$PROJECT_DIR/android/app/google-services.json"
+            echo "google-services.json placed in $PROJECT_DIR/android/app/"
           else
-            echo "No google-services.json at repo root — skipping (Google Sign-In config step not done yet, that's fine)"
+            echo "ERROR: google-services.json not found in repository root."
+            exit 1
           fi
-
-      # capacitor.config.ts and strings.xml live inside sitepadi-source.zip,
-      # so they can't be hand-edited on GitHub's website like the workflow
-      # file can. Patch the real Google Sign-In Web Client ID in here
-      # instead, every build, so the zip itself never needs touching.
-      - name: Apply Google Sign-In Web Client ID
-        run: |
-          sed -i "s/REPLACE_ME.apps.googleusercontent.com/211099277111-d7nrolgkmi1nde88fon5cs01f39r40sq.apps.googleusercontent.com/g" capacitor.config.ts
-          sed -i "s/REPLACE_ME.apps.googleusercontent.com/211099277111-d7nrolgkmi1nde88fon5cs01f39r40sq.apps.googleusercontent.com/g" android/app/src/main/res/values/strings.xml
-          echo "Web Client ID applied to both files"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
 
       - name: Install npm dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          npm install
+          npm ci
           npm install --no-save typescript
 
-      - name: Sync Capacitor (copies www/ into android/)
+      - name: Sync Capacitor
+        working-directory: ${{ env.PROJECT_DIR }}
         run: npx cap sync android
+
+      - name: Apply Google Sign-In Web Client ID
+        shell: bash
+        run: |
+          CLIENT_ID="211099277111-d7nrolgkmi1nde88fon5cs01f39r40sq.apps.googleusercontent.com"
+
+          if [ -f "$PROJECT_DIR/capacitor.config.ts" ]; then
+            sed -i "s#REPLACE_ME.apps.googleusercontent.com#$CLIENT_ID#g" "$PROJECT_DIR/capacitor.config.ts"
+          fi
+
+          STRINGS_FILE="$PROJECT_DIR/android/app/src/main/res/values/strings.xml"
+          if [ -f "$STRINGS_FILE" ]; then
+            sed -i "s#REPLACE_ME.apps.googleusercontent.com#$CLIENT_ID#g" "$STRINGS_FILE"
+          else
+            echo "ERROR: $STRINGS_FILE not found."
+            exit 1
+          fi
+
+          echo "Google Sign-In Web Client ID applied."
+
+      - name: Set Android version code and name
+        shell: bash
+        run: |
+          GRADLE_FILE="$PROJECT_DIR/android/app/build.gradle"
+
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "ERROR: $GRADLE_FILE not found."
+            exit 1
+          fi
+
+          # Release version for this build: versionCode 15, versionName 2.0
+          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 15/' "$GRADLE_FILE"
+          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "2.0"/' "$GRADLE_FILE"
+
+          echo "Android version configured:"
+          grep -E 'versionCode|versionName' "$GRADLE_FILE"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
+        run: chmod +x "$PROJECT_DIR/android/gradlew"
 
       - name: Build debug APK
-        working-directory: android
+        working-directory: ${{ env.PROJECT_DIR }}/android
         run: ./gradlew assembleDebug --no-daemon
 
-      # Release keystore never lives in the repo (unlike debug.keystore) —
-      # it's stored as a GitHub Secret (base64-encoded) and only exists
-      # as a real file transiently during this build, on GitHub's own
-      # server. If the secret isn't set yet, this step does nothing and
-      # the release build below just produces an unsigned artifact
-      # instead of failing.
       - name: Write release keystore from secret
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        shell: bash
         run: |
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
-            echo "Release keystore written"
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$PROJECT_DIR/android/app/release.keystore"
+            echo "Release keystore written."
           else
-            echo "RELEASE_KEYSTORE_BASE64 secret not set yet — skipping (release build will be unsigned)"
+            echo "WARNING: RELEASE_KEYSTORE_BASE64 is not set. Release may be unsigned."
           fi
 
-      - name: Build signed release (AAB + APK)
-        working-directory: android
+      - name: Build release AAB and APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
         run: ./gradlew bundleRelease assembleRelease --no-daemon
 
-      # The finished APK shows up as a downloadable "artifact" on the
-      # Actions run's results page — no terminal needed to get it.
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: sitepadi-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: sitepadi-debug-apk-v2.0
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
-      # .aab is what the Play Store actually requires for submission.
       - name: Upload release AAB
         uses: actions/upload-artifact@v4
         with:
-          name: sitepadi-release-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
+          name: sitepadi-release-aab-v2.0
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
 
-      # Signed APK — useful for sideloading to verify the signed release
-      # build actually works before uploading the AAB to Play Console.
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: sitepadi-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: sitepadi-release-apk-v2.0
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: error
