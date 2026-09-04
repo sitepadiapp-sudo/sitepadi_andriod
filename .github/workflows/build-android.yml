@@ -1,1 +1,130 @@
+name: Build Android APK
+on:
+  push:
+    branches: [ main, Revenue-cat-test ]
+  workflow_dispatch: {}
 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Reconstruct project source
+        run: |
+          test -f sitepadi-source-v22.b64 || { echo "ERROR: sitepadi-source-v22.b64 not found"; exit 1; }
+          base64 -d sitepadi-source-v22.b64 > sitepadi-source.zip
+          unzip -t sitepadi-source.zip
+          unzip -o sitepadi-source.zip -d .
+
+      - name: Locate Capacitor project
+        run: |
+          if [ -f capacitor.config.ts ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          elif [ -f source/capacitor.config.ts ]; then
+            echo "PROJECT_DIR=source" >> "$GITHUB_ENV"
+          else
+            PROJECT_DIR=$(dirname "$(find . -name capacitor.config.ts -type f -print -quit)")
+            if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "." ]; then
+              echo "ERROR: capacitor.config.ts not found after unzipping the project."
+              exit 1
+            fi
+            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          fi
+
+      - name: Set SitePadi version
+        run: |
+          BUILD_GRADLE="$PROJECT_DIR/android/app/build.gradle"
+          test -f "$BUILD_GRADLE" || { echo "ERROR: $BUILD_GRADLE not found"; exit 1; }
+          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 22/' "$BUILD_GRADLE"
+          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "2.6"/' "$BUILD_GRADLE"
+          grep -nE 'versionCode|versionName' "$BUILD_GRADLE"
+
+      - name: Place google-services.json
+        run: |
+          if [ -f google-services.json ]; then
+            mkdir -p "$PROJECT_DIR/android/app"
+            cp google-services.json "$PROJECT_DIR/android/app/google-services.json"
+          fi
+
+      - name: Apply Google Sign-In Web Client ID
+        run: |
+          CONFIG="$PROJECT_DIR/capacitor.config.ts"
+          STRINGS="$PROJECT_DIR/android/app/src/main/res/values/strings.xml"
+          test -f "$CONFIG" || { echo "ERROR: $CONFIG not found"; exit 1; }
+          sed -i "s/REPLACE_ME.apps.googleusercontent.com/211099277111-d7nrolgkmi1nde88fon5cs01f39r40sq.apps.googleusercontent.com/g" "$CONFIG"
+          if [ -f "$STRINGS" ]; then
+            sed -i "s/REPLACE_ME.apps.googleusercontent.com/211099277111-d7nrolgkmi1nde88fon5cs01f39r40sq.apps.googleusercontent.com/g" "$STRINGS"
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install npm dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+          npm install --no-save typescript
+
+      - name: Sync Capacitor
+        run: |
+          cd "$PROJECT_DIR"
+          npx cap sync android
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x "$PROJECT_DIR/android/gradlew"
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR/android"
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Write release keystore from secret
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$PROJECT_DIR/android/app/release.keystore"
+          fi
+
+      - name: Build signed release (AAB + APK)
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          cd "$PROJECT_DIR/android"
+          ./gradlew bundleRelease assembleRelease --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitepadi-debug-apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitepadi-release-aab
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitepadi-release-apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+          if-no-files-found: error
