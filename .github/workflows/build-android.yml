@@ -53,9 +53,9 @@ jobs:
         run: |
           BUILD_GRADLE="$PROJECT_DIR/android/app/build.gradle"
           test -f "$BUILD_GRADLE" || { echo "ERROR: $BUILD_GRADLE not found"; exit 1; }
-          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 21/' "$BUILD_GRADLE"
-          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "2.5"/' "$BUILD_GRADLE"
-          echo "SitePadi version set to versionCode 21 / versionName 2.5"
+          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 22/' "$BUILD_GRADLE"
+          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "2.6"/' "$BUILD_GRADLE"
+          echo "SitePadi version set to versionCode 22 / versionName 2.5"
           grep -nE 'versionCode|versionName' "$BUILD_GRADLE"
 
       - name: Place google-services.json
