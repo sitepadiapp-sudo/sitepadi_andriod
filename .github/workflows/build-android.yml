@@ -3,74 +3,64 @@ name: Build SitePadi Android 3.10
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - Revenue-cat-test
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate final SitePadi source ZIP
+      - name: Locate and validate SitePadi source ZIP
+        shell: bash
         run: |
-          ZIP="sitepadi-source-v37-3.10-REVENUECAT-13.5.0-FINAL.zip"
+          set -euo pipefail
+          ZIP="sitepadi-source-v37-3.9-REVENUECAT-13.5.0-FINAL.zip"
           test -f "$ZIP" || {
-            echo "ERROR: $ZIP not found in repository root."
-            echo "The workflow must be run against Revenue-cat-test."
+            echo "ERROR: $ZIP was not found in the repository root."
+            find . -maxdepth 2 -type f -name '*.zip' -print || true
             exit 1
           }
           unzip -t "$ZIP"
+          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
 
       - name: Extract final source
+        shell: bash
         run: |
-          ZIP="sitepadi-source-v37-3.10-REVENUECAT-13.5.0-FINAL.zip"
+          set -euo pipefail
           rm -rf build-source
           mkdir -p build-source
-          unzip -q "$ZIP" -d build-source
-
+          unzip -q "$SOURCE_ZIP" -d build-source
           if [ -f build-source/capacitor.config.ts ]; then
-            echo "PROJECT_DIR=build-source" >> "$GITHUB_ENV"
+            PROJECT_DIR="build-source"
           elif [ -f build-source/source/capacitor.config.ts ]; then
-            echo "PROJECT_DIR=build-source/source" >> "$GITHUB_ENV"
+            PROJECT_DIR="build-source/source"
           else
-            PROJECT_DIR=$(dirname "$(find build-source -name capacitor.config.ts -type f -print -quit)")
-            test -n "$PROJECT_DIR" || {
-              echo "ERROR: capacitor.config.ts not found."
-              exit 1
-            }
-            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+            CONFIG_PATH="$(find build-source -name capacitor.config.ts -type f -print -quit)"
+            test -n "$CONFIG_PATH"
+            PROJECT_DIR="$(dirname "$CONFIG_PATH")"
           fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify RevenueCat version
+      - name: Verify RevenueCat 13.5.0
         run: |
+          set -euo pipefail
           test -f "$PROJECT_DIR/package.json"
-
-          grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package.json" || {
-            echo "ERROR: RevenueCat 13.5.0 not found in package.json."
-            exit 1
-          }
-
+          grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package.json"
           if [ -f "$PROJECT_DIR/package-lock.json" ]; then
-            grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package-lock.json" || {
-              echo "ERROR: RevenueCat 13.5.0 not found in package-lock.json."
-              exit 1
-            }
+            grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package-lock.json"
           fi
 
-      - name: Enforce Android version 3.10 / 36
+      - name: Set SitePadi Android version 3.10 / 36
         run: |
+          set -euo pipefail
           BUILD_GRADLE="$PROJECT_DIR/android/app/build.gradle"
-
-          test -f "$BUILD_GRADLE" || {
-            echo "ERROR: Android build.gradle not found."
-            exit 1
-          }
-
-          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 36/' "$BUILD_GRADLE"
-          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "3.10"/' "$BUILD_GRADLE"
-
+          test -f "$BUILD_GRADLE"
+          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 36/g' "$BUILD_GRADLE"
+          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "3.10"/g' "$BUILD_GRADLE"
           grep -nE 'versionCode|versionName' "$BUILD_GRADLE"
 
       - name: Set up Node.js
@@ -84,9 +74,13 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm ci
 
-      - name: Install TypeScript
+      - name: Install TypeScript for Capacitor config
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm install --no-save --package-lock=false typescript
+
+      - name: Verify TypeScript
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npx tsc --version
 
       - name: Sync Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
@@ -104,11 +98,12 @@ jobs:
       - name: Grant Gradle execute permission
         run: chmod +x "$PROJECT_DIR/android/gradlew"
 
-      - name: Write release keystore
+      - name: Prepare release keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+          set -euo pipefail
+          if [ -n "${RELEASE_KEYSTORE_BASE64:-}" ]; then
             echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$PROJECT_DIR/android/app/release.keystore"
           fi
 
