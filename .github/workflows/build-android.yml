@@ -1,4 +1,4 @@
-name: Build SitePadi Android 3.9
+name: Build SitePadi Android 3.10
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
 
       - name: Locate final SitePadi source ZIP
         run: |
-          ZIP="sitepadi-source-v37-3.9-REVENUECAT-13.5.0-FINAL.zip"
+          ZIP="sitepadi-source-v37-3.10-REVENUECAT-13.5.0-FINAL.zip"
           test -f "$ZIP" || {
             echo "ERROR: $ZIP not found in repository root."
             echo "The workflow must be run against Revenue-cat-test."
@@ -25,7 +25,7 @@ jobs:
 
       - name: Extract final source
         run: |
-          ZIP="sitepadi-source-v37-3.9-REVENUECAT-13.5.0-FINAL.zip"
+          ZIP="sitepadi-source-v37-3.10-REVENUECAT-13.5.0-FINAL.zip"
           rm -rf build-source
           mkdir -p build-source
           unzip -q "$ZIP" -d build-source
@@ -59,7 +59,7 @@ jobs:
             }
           fi
 
-      - name: Enforce Android version 3.9 / 35
+      - name: Enforce Android version 3.10 / 36
         run: |
           BUILD_GRADLE="$PROJECT_DIR/android/app/build.gradle"
 
@@ -68,8 +68,8 @@ jobs:
             exit 1
           }
 
-          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 35/' "$BUILD_GRADLE"
-          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "3.9"/' "$BUILD_GRADLE"
+          sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 36/' "$BUILD_GRADLE"
+          sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "3.10"/' "$BUILD_GRADLE"
 
           grep -nE 'versionCode|versionName' "$BUILD_GRADLE"
 
