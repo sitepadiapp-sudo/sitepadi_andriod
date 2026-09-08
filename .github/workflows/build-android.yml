@@ -18,7 +18,7 @@ jobs:
           ZIP="sitepadi-source-v37-3.9-REVENUECAT-13.5.0-FINAL.zip"
           test -f "$ZIP" || {
             echo "ERROR: $ZIP not found in repository root."
-            echo "Upload the ZIP to the repository root, then run this workflow."
+            echo "The workflow must be run against Revenue-cat-test."
             exit 1
           }
           unzip -t "$ZIP"
@@ -45,8 +45,9 @@ jobs:
       - name: Verify RevenueCat version
         run: |
           test -f "$PROJECT_DIR/package.json"
+
           grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package.json" || {
-            echo "ERROR: RevenueCat 13.5.0 not found in package.json."
+            echo "ERROR: RevenueCat 13.5.0 not found."
             exit 1
           }
 
@@ -60,8 +61,9 @@ jobs:
       - name: Enforce Android version 3.9 / 35
         run: |
           BUILD_GRADLE="$PROJECT_DIR/android/app/build.gradle"
+
           test -f "$BUILD_GRADLE" || {
-            echo "ERROR: $BUILD_GRADLE not found."
+            echo "ERROR: Android build.gradle not found."
             exit 1
           }
 
