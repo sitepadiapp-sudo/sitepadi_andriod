@@ -10,57 +10,102 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate and validate SitePadi source ZIP
+      - name: Locate SitePadi source
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="sitepadi-source-v38-3.10-REVENUECAT-13.5.0-FIXED.zip"
-          test -f "$ZIP" || {
-            echo "ERROR: $ZIP was not found in the repository root."
-            find . -maxdepth 2 -type f -name '*.zip' -print || true
-            exit 1
-          }
-          unzip -t "$ZIP"
-          echo "SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+          SOURCE_NAME="sitepadi-source-v38-3.10-REVENUECAT-13.5.0-FIXED.zip"
+          BUNDLE_NAME="sitepadi_andriod-Revenue-cat-test-3.10-FIXED.zip"
+
+          if [ -f "$SOURCE_NAME" ]; then
+            echo "Found source ZIP at repository root: $SOURCE_NAME"
+            echo "SOURCE_ZIP=$SOURCE_NAME" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ -f "$BUNDLE_NAME" ]; then
+            echo "Found complete repository bundle: $BUNDLE_NAME"
+            rm -rf bundle-extract
+            mkdir -p bundle-extract
+            unzip -q "$BUNDLE_NAME" -d bundle-extract
+
+            FOUND="$(find bundle-extract -type f -name "$SOURCE_NAME" -print -quit)"
+            if [ -z "$FOUND" ]; then
+              echo "ERROR: The complete bundle does not contain $SOURCE_NAME"
+              echo "ZIP contents:"
+              find bundle-extract -type f -maxdepth 5 -print
+              exit 1
+            fi
+
+            cp "$FOUND" "./$SOURCE_NAME"
+            echo "Extracted source ZIP to repository root: $SOURCE_NAME"
+            echo "SOURCE_ZIP=$SOURCE_NAME" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "ERROR: Neither the source ZIP nor the complete repository bundle was found."
+          echo "ZIP files present in repository:"
+          find . -type f -name '*.zip' -print || true
+          exit 1
+
+      - name: Validate SitePadi source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$SOURCE_ZIP"
+          unzip -t "$SOURCE_ZIP"
 
       - name: Extract final source
         shell: bash
         run: |
           set -euo pipefail
+
           rm -rf build-source
           mkdir -p build-source
           unzip -q "$SOURCE_ZIP" -d build-source
-          if [ -f build-source/capacitor.config.ts ]; then
-            PROJECT_DIR="build-source"
-          elif [ -f build-source/source/capacitor.config.ts ]; then
-            PROJECT_DIR="build-source/source"
-          else
-            CONFIG_PATH="$(find build-source -name capacitor.config.ts -type f -print -quit)"
-            test -n "$CONFIG_PATH"
-            PROJECT_DIR="$(dirname "$CONFIG_PATH")"
+
+          CONFIG_PATH="$(find build-source -name capacitor.config.ts -type f -print -quit)"
+          if [ -z "$CONFIG_PATH" ]; then
+            echo "ERROR: capacitor.config.ts was not found."
+            find build-source -maxdepth 4 -type f -print
+            exit 1
           fi
+
+          PROJECT_DIR="$(dirname "$CONFIG_PATH")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using project directory: $PROJECT_DIR"
 
       - name: Verify RevenueCat 13.5.0
+        shell: bash
         run: |
           set -euo pipefail
+
           test -f "$PROJECT_DIR/package.json"
           grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package.json"
+
           if [ -f "$PROJECT_DIR/package-lock.json" ]; then
             grep -q '"@revenuecat/purchases-capacitor"[[:space:]]*:[[:space:]]*"13.5.0"' "$PROJECT_DIR/package-lock.json"
           fi
 
+          echo "RevenueCat Capacitor 13.5.0 verified."
+
       - name: Set SitePadi Android version 3.10 / 36
+        shell: bash
         run: |
           set -euo pipefail
+
           BUILD_GRADLE="$PROJECT_DIR/android/app/build.gradle"
           test -f "$BUILD_GRADLE"
+
           sed -i -E 's/versionCode[[:space:]]+[0-9]+/versionCode 36/g' "$BUILD_GRADLE"
           sed -i -E 's/versionName[[:space:]]+"[^"]+"/versionName "3.10"/g' "$BUILD_GRADLE"
+
           grep -nE 'versionCode|versionName' "$BUILD_GRADLE"
 
       - name: Set up Node.js
@@ -86,6 +131,19 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: npx cap sync android
 
+      - name: Verify bundled web assets match source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -f "$PROJECT_DIR/www/index.html" ] && [ -f "$PROJECT_DIR/android/app/src/main/assets/public/index.html" ]; then
+            A="$(sha256sum "$PROJECT_DIR/www/index.html" | awk '{print $1}')"
+            B="$(sha256sum "$PROJECT_DIR/android/app/src/main/assets/public/index.html" | awk '{print $1}')"
+            echo "www/index.html: $A"
+            echo "android bundled index.html: $B"
+            test "$A" = "$B"
+          fi
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -101,8 +159,10 @@ jobs:
       - name: Prepare release keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        shell: bash
         run: |
           set -euo pipefail
+
           if [ -n "${RELEASE_KEYSTORE_BASE64:-}" ]; then
             echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$PROJECT_DIR/android/app/release.keystore"
           fi
