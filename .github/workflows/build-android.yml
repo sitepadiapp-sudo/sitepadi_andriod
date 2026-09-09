@@ -1,4 +1,4 @@
-name: Build SitePadi Android 3.10
+name: Build SitePadi Android 3.10 FIXED
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="sitepadi-source-v37-3.9-REVENUECAT-13.5.0-FINAL.zip"
+          ZIP="sitepadi-source-v38-3.10-REVENUECAT-13.5.0-FIXED.zip"
           test -f "$ZIP" || {
             echo "ERROR: $ZIP was not found in the repository root."
             find . -maxdepth 2 -type f -name '*.zip' -print || true
